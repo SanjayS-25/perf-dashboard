@@ -92,6 +92,8 @@ def build_label_map(all_groups, build_name_map):
 def plot_bar(df_mod, lmap, module_title):
     groups      = sorted(df_mod['Transaction_Group'].dropna().unique())
     build_order = [lmap.get(g, g) for g in groups]
+    # Two-line labels: "Build 01\nPg_Bouncer"
+    tick_labels = [f"Build {g}\n{lmap.get(g, g)}" for g in groups]
     df_plot     = df_mod.copy()
     df_plot['Build_Label'] = df_plot['Transaction_Group'].map(lmap)
 
@@ -113,6 +115,8 @@ def plot_bar(df_mod, lmap, module_title):
     ax.set_title(f'{module_title} — Response Time by Build & Subtype', fontsize=13, fontweight='600', pad=12)
     ax.set_xlabel('Build / Sprint', fontsize=11)
     ax.set_ylabel('Response Time (seconds)', fontsize=11)
+    ax.set_xticks(range(len(build_order)))
+    ax.set_xticklabels(tick_labels, fontsize=10)
     ax.legend(title='Subtype', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
     ax.grid(axis='y', linestyle='--', alpha=0.4)
     fig.patch.set_facecolor('white')
@@ -147,8 +151,9 @@ def plot_line(df_mod, lmap, module_title):
     ax.set_title(f'{module_title} — Response Time Trend', fontsize=13, fontweight='600', pad=12)
     ax.set_xlabel('Build / Sprint', fontsize=11)
     ax.set_ylabel('Response Time (seconds)', fontsize=11)
+    tick_labels = [f"Build {g}\n{lmap.get(g, g)}" for g in groups]
     ax.set_xticks(range(len(build_order)))
-    ax.set_xticklabels(build_order)
+    ax.set_xticklabels(tick_labels, fontsize=10)
     ax.legend(title='Subtype', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
     ax.grid(axis='y', linestyle='--', alpha=0.4)
     fig.patch.set_facecolor('white')
