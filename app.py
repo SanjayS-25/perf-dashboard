@@ -78,7 +78,15 @@ def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_label_map(all_groups, build_name_map):
-    return {g: build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(sorted(all_groups))}
+    """
+    Maps raw group codes (e.g. '01','02','03') → custom names (e.g. 'Pg_Bouncer').
+    Falls back to 'Build 1', 'Build 2' etc. if no custom name set.
+    Always reloads from disk so saved names are picked up immediately.
+    """
+    fresh = load_config().get("build_names", {})
+    # merge: fresh config wins over passed-in map
+    merged = {**build_name_map, **fresh}
+    return {g: merged.get(g, f'Build {i+1}') for i, g in enumerate(sorted(all_groups))}
 
 
 def plot_bar(df_mod, lmap, module_title):
@@ -223,24 +231,48 @@ if st.session_state.admin_unlocked:
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("Step 1 — Upload CSV")
-        uploaded = st.file_uploader("Upload combined CSV (all modules + all builds)", type=["csv"])
-        if uploaded:
-            raw = pd.read_csv(uploaded)
-            df  = extract_fields(raw)
-            df.to_csv(CSV_PATH, index=False)
-            all_groups_new        = sorted(df['Transaction_Group'].dropna().unique())
-            cfg["csv_uploaded"]   = True
-            cfg["all_groups"]     = all_groups_new
-            # Keep existing names, add defaults for new groups
-            existing = cfg.get("build_names", {})
-            for i, g in enumerate(all_groups_new):
-                if g not in existing:
-                    existing[g] = f"Build {i+1}"
-            cfg["build_names"] = existing
-            save_config(cfg)
-            st.success(f"✅ CSV uploaded! {len(df)} rows, {len(all_groups_new)} builds detected: {', '.join(all_groups_new)}")
-            st.rerun()
+        st.subheader("Step 1 — Upload CSV(s)")
+        st.caption("Upload one or multiple CSV files — they will be merged automatically.")
+        uploaded_files = st.file_uploader(
+            "Upload CSV files (one per module or one combined)",
+            type=["csv"],
+            accept_multiple_files=True
+        )
+        if uploaded_files:
+            frames = []
+            file_names = []
+            for f in uploaded_files:
+                try:
+                    raw = pd.read_csv(f)
+                    frames.append(raw)
+                    file_names.append(f.name)
+                except Exception as e:
+                    st.warning(f"⚠️ Could not read {f.name}: {e}")
+
+            if frames:
+                combined = pd.concat(frames, ignore_index=True)
+                combined = combined.drop_duplicates()
+                df = extract_fields(combined)
+                df.to_csv(CSV_PATH, index=False)
+                all_groups_new      = sorted(df["Transaction_Group"].dropna().unique())
+                cfg["csv_uploaded"] = True
+                cfg["all_groups"]   = all_groups_new
+                existing = cfg.get("build_names", {})
+                for i, g in enumerate(all_groups_new):
+                    if g not in existing:
+                        existing[g] = f"Build {i+1}"
+                cfg["build_names"] = existing
+                save_config(cfg)
+                st.success(
+                    f"✅ {len(uploaded_files)} file(s) merged!  "
+                    f"{len(df)} total rows  |  "
+                    f"{df['Prefix'].nunique()} modules  |  "
+                    f"{len(all_groups_new)} builds detected: {', '.join(all_groups_new)}"
+                )
+                with st.expander("Files loaded"):
+                    for name in file_names:
+                        st.write(f"• {name}")
+                st.rerun()
 
     with col2:
         st.subheader("Step 2 — Name Each Build / Sprint")
@@ -256,11 +288,16 @@ if st.session_state.admin_unlocked:
                         value=build_names.get(g, f"Build {i+1}"),
                         key=f"admin_bn_{g}"
                     )
+            # Preview mapping before saving
+            st.markdown("**Preview mapping:**  " + "  |  ".join([f" → **{v}**" for g, v in new_names.items()]))
+
             if st.button("💾 Save Build Names", type="primary"):
-                cfg["build_names"] = new_names
+                # Store as string keys to match CSV values exactly
+                cfg["build_names"] = {str(g): str(v) for g, v in new_names.items()}
                 save_config(cfg)
-                st.success("✅ Saved! Viewers will now see the updated build names on all charts.")
+                st.success("✅ Saved! Build names: " + ", ".join(new_names.values()))
                 st.balloons()
+                st.rerun()
         else:
             st.info("Upload a CSV in Step 1 first.")
 
