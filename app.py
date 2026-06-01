@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import re
+import json
+import os
 
 st.set_page_config(
     page_title="Performance Dashboard",
@@ -12,72 +14,94 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .block-container { padding-top: 2rem; }
+    .block-container { padding-top: 1.5rem; }
     .metric-card {
         background: white;
         border-radius: 12px;
-        padding: 1.2rem 1.5rem;
+        padding: 1.1rem 1rem;
         box-shadow: 0 1px 4px rgba(0,0,0,0.08);
         text-align: center;
+        margin-bottom: 0.5rem;
     }
-    .metric-label { font-size: 0.75rem; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
-    .metric-value { font-size: 1.9rem; font-weight: 700; color: #1a1a2e; }
+    .metric-label { font-size: 0.72rem; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 1.7rem; font-weight: 700; color: #1a1a2e; }
+    .admin-box {
+        background: #f0f4ff;
+        border-left: 4px solid #4e6ef2;
+        border-radius: 8px;
+        padding: 1rem 1.2rem;
+        margin-bottom: 1rem;
+        font-size: 13px;
+    }
+    .stTabs [data-baseweb="tab"] { font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Config file paths (persisted on disk) ──
+CONFIG_PATH = "dashboard_config.json"
+CSV_PATH = "uploaded_data.csv"
 
-@st.cache_data
-def load_data(file):
-    return pd.read_csv(file)
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    return {"build_names": {}, "csv_uploaded": False}
+
+
+def save_config(cfg):
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f)
 
 
 def extract_module_name(transaction: str) -> str:
-    """Extract human-readable module name from transaction string.
-    e.g. SC04_TC01_Search Nutri-Assess Patients_01 → Nutri-Assess
-    Tries to find the meaningful part after TCxx_
+    """Extract human-readable module name.
+    SC04_TC01_Search Nutri-Assess Patients_01 → Nutri-Assess
+    SC03_TC01_Search Vision Patients → Vision
     """
     parts = transaction.split('_')
-    if len(parts) >= 3:
-        raw = parts[2].strip()
-        # Remove trailing ' Patients', ' Patient', ' Users' etc.
-        raw = re.sub(r'\s*(Patients?|Users?|Records?)$', '', raw, flags=re.IGNORECASE).strip()
-        # Remove leading action words like Search, Open, Get, Create, Park etc.
-        raw = re.sub(r'^(Search|Open|Get|Create|Park|Add|Edit|Delete|View|Save|Submit|List)\s*[-–]?\s*', '', raw, flags=re.IGNORECASE).strip()
-        if raw:
-            return raw
-    return parts[0]  # fallback to prefix
+    if len(parts) < 3:
+        return transaction
+
+    raw = parts[2].strip()
+    # Remove build suffix like _01 at end
+    raw = re.sub(r'_\d{2}$', '', raw).strip()
+    # Remove trailing ' Patients', ' Patient', ' Users'
+    raw = re.sub(r'\s+(Patients?|Users?|Records?|Patient)\s*$', '', raw, flags=re.IGNORECASE).strip()
+    # Remove leading action word (Search, Open, Get, Create, Park, Update, Print, Redirect)
+    raw = re.sub(r'^(Search|Open|Get|Create|Park|Update|Print|Redirect\s+To|Add|Edit|Delete|View|Save|Submit|List)\s*[-–]?\s*', '', raw, flags=re.IGNORECASE).strip()
+    return raw if raw else parts[0]
 
 
 def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    # Skip rows without proper SC prefix
+    df = df[df['Transaction'].str.match(r'^SC\d+_', na=False)].copy()
+    df = df[~df['Transaction'].str.upper().str.startswith('TOTAL')].copy()
+
     df['Transaction_Subtype'] = (
         df['Transaction'].str.split('_').str[2]
         .str.strip().str.split(' ').str[0]
     )
-    df['Transaction_Group'] = df['Transaction'].str.extract(r'(\d{2})$')
+    df['Transaction_Group'] = df['Transaction'].str.extract(r'_(\d{2})$')
     df['Prefix'] = df['Transaction'].str.split('_').str[0]
-
-    # Extract module name dynamically
     df['Module_Name'] = df['Transaction'].apply(extract_module_name)
-
     return df
 
 
 def plot_bar(df_mod, build_name_map, module_title):
     groups = sorted(df_mod['Transaction_Group'].dropna().unique())
-    build_order = [build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(groups)]
+    label_map = {g: build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(groups)}
+    build_order = [label_map[g] for g in groups]
 
     df_plot = df_mod.copy()
-    df_plot['Build_Label'] = df_plot['Transaction_Group'].map(
-        {g: build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(groups)}
-    )
+    df_plot['Build_Label'] = df_plot['Transaction_Group'].map(label_map)
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    sns.barplot(
-        data=df_plot, x='Build_Label', y='Response time(sec)',
-        hue='Transaction_Subtype', palette='tab10',
-        order=build_order, ax=ax
-    )
+    sns.barplot(data=df_plot, x='Build_Label', y='Response time(sec)',
+                hue='Transaction_Subtype', palette='tab10',
+                order=build_order, ax=ax)
+
     for container, subtype in zip(ax.containers, ax.get_legend_handles_labels()[1]):
         for bar in container:
             h = bar.get_height()
@@ -100,8 +124,8 @@ def plot_bar(df_mod, build_name_map, module_title):
 
 def plot_line(df_mod, build_name_map, module_title):
     groups = sorted(df_mod['Transaction_Group'].dropna().unique())
-    build_order = [build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(groups)]
     label_map = {g: build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(groups)}
+    build_order = [label_map[g] for g in groups]
     subtypes = sorted(df_mod['Transaction_Subtype'].dropna().unique())
 
     colors = sns.color_palette('tab10', len(subtypes))
@@ -112,8 +136,7 @@ def plot_line(df_mod, build_name_map, module_title):
         agg = (
             df_mod[df_mod['Transaction_Subtype'] == sub]
             .assign(Build_Label=lambda d: d['Transaction_Group'].map(label_map))
-            .groupby('Build_Label')['Response time(sec)']
-            .mean()
+            .groupby('Build_Label')['Response time(sec)'].mean()
             .reindex(build_order)
         )
         ax.plot(agg.index, agg.values, label=sub,
@@ -137,55 +160,132 @@ def plot_line(df_mod, build_name_map, module_title):
     return fig
 
 
-# ── UI ──────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+#  MAIN
+# ════════════════════════════════════════════════════════════
 
-st.title("📊 Performance Response Time Dashboard")
-st.caption("Upload your load test CSV — charts auto-generate per module with your custom build/sprint names.")
+cfg = load_config()
 
-uploaded = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
+# ── Sidebar ──
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/48/combo-chart.png", width=40)
+    st.title("Dashboard Settings")
 
-if uploaded:
-    raw = load_data(uploaded)
-    df = extract_fields(raw)
+    mode = st.radio("Mode", ["👁️ View Dashboard", "⚙️ Admin Setup"], index=0)
 
-    # ── Detect unique groups (builds) ──
-    all_groups = sorted(df['Transaction_Group'].dropna().unique())
+# ════════════════════════════════════════════════════════════
+#  ADMIN SETUP MODE
+# ════════════════════════════════════════════════════════════
+if mode == "⚙️ Admin Setup":
+    st.title("⚙️ Admin Setup")
+    st.markdown('<div class="admin-box">Configure once → share URL → everyone sees the same data & names.</div>', unsafe_allow_html=True)
 
-    # ── Sidebar: custom build names + module selector ──
-    with st.sidebar:
-        st.header("⚙️ Settings")
+    # Step 1: Upload CSV
+    st.subheader("Step 1 — Upload CSV")
+    uploaded = st.file_uploader("Upload your combined CSV (all modules, all builds)", type=["csv"])
 
-        st.subheader("🏷️ Build / Sprint Names")
-        st.caption("Rename each build to your sprint or release label")
-        build_name_map = {}
+    if uploaded:
+        raw = pd.read_csv(uploaded)
+        df = extract_fields(raw)
+        df.to_csv(CSV_PATH, index=False)
+        cfg["csv_uploaded"] = True
+
+        all_groups = sorted(df['Transaction_Group'].dropna().unique())
+        cfg["all_groups"] = all_groups
+        save_config(cfg)
+        st.success(f"✅ CSV saved! Found {len(all_groups)} builds: {', '.join(all_groups)}")
+
+    # Step 2: Name the builds
+    if cfg.get("csv_uploaded") and cfg.get("all_groups"):
+        st.subheader("Step 2 — Name Each Build / Sprint")
+        st.caption("These names will show on charts for all viewers.")
+
+        all_groups = cfg["all_groups"]
+        build_names = cfg.get("build_names", {})
+        new_names = {}
+        cols = st.columns(min(len(all_groups), 4))
         for i, g in enumerate(all_groups):
-            default = f"Sprint {i+1}"
-            name = st.text_input(f"Build {g} name", value=default, key=f"build_{g}")
-            build_name_map[g] = name
+            with cols[i % len(cols)]:
+                default = build_names.get(g, f"Sprint {i+1}")
+                new_names[g] = st.text_input(f"Build **{g}** label", value=default, key=f"bn_{g}")
 
+        if st.button("💾 Save Build Names", type="primary"):
+            cfg["build_names"] = new_names
+            save_config(cfg)
+            st.success("✅ Build names saved! Switch to View Dashboard to see the result.")
+            st.balloons()
+
+    if not cfg.get("csv_uploaded"):
+        st.info("Upload a CSV above to continue.")
+
+# ════════════════════════════════════════════════════════════
+#  VIEW DASHBOARD MODE
+# ════════════════════════════════════════════════════════════
+else:
+    if not cfg.get("csv_uploaded") or not os.path.exists(CSV_PATH):
+        st.title("📊 Performance Response Time Dashboard")
+        st.warning("⚠️ No data loaded yet. Ask the admin to upload the CSV via Admin Setup mode.")
+        st.stop()
+
+    df_all = pd.read_csv(CSV_PATH)
+    build_name_map = cfg.get("build_names", {})
+
+    # Build module list with readable names
+    module_map = {}  # prefix → module name
+    for prefix, grp in df_all.groupby('Prefix'):
+        name = grp['Module_Name'].mode()[0]
+        module_map[prefix] = name
+
+    # Deduplicate: if two prefixes get same module name, append prefix
+    name_counts = {}
+    for p, n in module_map.items():
+        name_counts[n] = name_counts.get(n, 0) + 1
+    for p in module_map:
+        if name_counts[module_map[p]] > 1:
+            module_map[p] = f"{module_map[p]} ({p})"
+
+    sorted_prefixes = sorted(module_map.keys())
+    module_options = {module_map[p]: p for p in sorted_prefixes}
+
+    # ── Sidebar filters ──
+    with st.sidebar:
         st.divider()
-
-        # Module selector — using detected module names
-        st.subheader("📦 Module")
-        prefixes = sorted(df['Prefix'].dropna().unique())
-        module_display = {}
-        for p in prefixes:
-            # Get the most common module name for this prefix
-            name = df[df['Prefix'] == p]['Module_Name'].mode()[0]
-            module_display[p] = f"{name} ({p})"
+        st.subheader("🔍 Filter")
 
         all_label = "All Modules"
-        options = [all_label] + list(module_display.values())
-        selected = st.selectbox("Select module", options)
+        selected_module = st.selectbox(
+            "Module",
+            [all_label] + list(module_options.keys()),
+            help="Filter by module"
+        )
+
+        # Build filter
+        all_groups = sorted(df_all['Transaction_Group'].dropna().unique())
+        build_labels = {g: build_name_map.get(g, f'Build {i+1}') for i, g in enumerate(all_groups)}
+        build_display = list(build_labels.values())
+        selected_builds = st.multiselect(
+            "Builds / Sprints",
+            options=build_display,
+            default=build_display,
+            help="Select which builds to compare"
+        )
+
+        # Reverse map selected build labels → group codes
+        label_to_group = {v: k for k, v in build_labels.items()}
+        selected_groups = [label_to_group[b] for b in selected_builds if b in label_to_group]
 
     # Filter data
-    if selected == all_label:
-        df_view = df
-        view_title = "All Modules"
+    df_view = df_all[df_all['Transaction_Group'].isin(selected_groups)].copy()
+    if selected_module != all_label:
+        sel_prefix = module_options[selected_module]
+        df_view = df_view[df_view['Prefix'] == sel_prefix]
+        view_prefixes = [sel_prefix]
     else:
-        sel_prefix = [p for p, label in module_display.items() if label == selected][0]
-        df_view = df[df['Prefix'] == sel_prefix]
-        view_title = selected
+        view_prefixes = sorted_prefixes
+
+    st.title("📊 Performance Response Time Dashboard")
+    if selected_builds:
+        st.caption(f"Comparing: **{'  vs  '.join(selected_builds)}**")
 
     # ── Metric cards ──
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -205,39 +305,40 @@ if uploaded:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Charts ──
-    if selected == all_label and len(prefixes) > 1:
-        tabs = st.tabs([module_display[p] for p in prefixes])
-        for tab, p in zip(tabs, prefixes):
-            with tab:
-                df_mod = df[df['Prefix'] == p]
-                mod_title = module_display[p]
-                st.pyplot(plot_bar(df_mod, build_name_map, mod_title))
-                st.markdown("<br>", unsafe_allow_html=True)
+    # ── Charts — tabs per module ──
+    display_prefixes = [p for p in view_prefixes if p in [r for r in df_view['Prefix'].unique()]]
+
+    if not display_prefixes:
+        st.warning("No data for selected filters.")
+        st.stop()
+
+    tab_labels = [module_map[p] for p in display_prefixes]
+    tabs = st.tabs(tab_labels)
+
+    for tab, prefix in zip(tabs, display_prefixes):
+        with tab:
+            df_mod = df_view[df_view['Prefix'] == prefix]
+            mod_title = module_map[prefix]
+
+            if df_mod['Transaction_Group'].nunique() < 1:
+                st.info("No data for selected builds.")
+                continue
+
+            st.pyplot(plot_bar(df_mod, build_name_map, mod_title))
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            if df_mod['Transaction_Group'].nunique() > 1:
                 st.pyplot(plot_line(df_mod, build_name_map, mod_title))
-    else:
-        st.pyplot(plot_bar(df_view, build_name_map, view_title))
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.pyplot(plot_line(df_view, build_name_map, view_title))
+            else:
+                st.info("Select more than 1 build to see trend line chart.")
 
-    with st.expander("📋 View raw data"):
-        st.dataframe(
-            df_view[['Transaction', 'Module_Name', 'Transaction_Subtype',
-                     'Transaction_Group', 'Response time(sec)', 'Error %']],
-            use_container_width=True
-        )
-
-else:
-    st.info("⬆️ Upload a CSV file to get started. Supports single or combined multi-module files.")
-    st.markdown("""
-    **Expected CSV columns:**
-    - `Transaction` — e.g. `SC04_TC01_Search Nutri-Assess Patients_01`
-    - `Response time(sec)`
-    - `Error %`
-    - `# No of Reqs` *(optional)*
-
-    **Features:**
-    - 🏷️ Set custom Sprint/Release names in the sidebar
-    - 📦 Module auto-detected from transaction name
-    - 📊 Bar chart + Line chart per module
-    """)
+            with st.expander("📋 Raw data"):
+                st.dataframe(
+                    df_mod[['Transaction', 'Module_Name', 'Transaction_Subtype',
+                             'Transaction_Group', 'Response time(sec)', 'Error %']].rename(
+                        columns={'Transaction_Group': 'Build Code',
+                                 'Transaction_Subtype': 'Subtype',
+                                 'Module_Name': 'Module'}
+                    ),
+                    use_container_width=True
+                )
