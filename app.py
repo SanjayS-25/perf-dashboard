@@ -93,15 +93,17 @@ def build_label_map(all_groups, build_name_map):
 # ── Chart helpers ─────────────────────────────────────────────────────────────
 
 def plot_bar(df_mod, lmap, groups, module_title):
-    build_order  = [lmap.get(g, g) for g in groups]
-    tick_labels  = [f"Build {g}\n{lmap.get(g, g)}" for g in groups]
-    df_plot      = df_mod.copy()
-    df_plot['Build_Label'] = df_plot['Transaction_Group'].map(lmap)
+    # Use group code as x-axis key to avoid duplicate label issue
+    df_plot = df_mod.copy()
+    df_plot['Build_Code'] = df_plot['Transaction_Group']
+    code_order  = list(groups)
+    # Two-line tick: "Build 01 / Pg_Bouncer" only shown once via set_xticklabels
+    tick_labels = [f"Build {g}\n{lmap.get(g, g)}" for g in groups]
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    sns.barplot(data=df_plot, x='Build_Label', y='Response time(sec)',
+    sns.barplot(data=df_plot, x='Build_Code', y='Response time(sec)',
                 hue='Transaction_Subtype', palette='tab10',
-                order=build_order, ax=ax)
+                order=code_order, ax=ax)
 
     for container, subtype in zip(ax.containers, ax.get_legend_handles_labels()[1]):
         for bar in container:
@@ -117,8 +119,8 @@ def plot_bar(df_mod, lmap, groups, module_title):
                  fontsize=13, fontweight='600', pad=12)
     ax.set_xlabel('Build / Sprint', fontsize=11)
     ax.set_ylabel('Response Time (seconds)', fontsize=11)
-    ax.set_xticks(range(len(build_order)))
-    ax.set_xticklabels(tick_labels, fontsize=10)
+    ax.set_xticks(range(len(code_order)))
+    ax.set_xticklabels(tick_labels, fontsize=10, ha='center')
     ax.legend(title='Subtype', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
     ax.grid(axis='y', linestyle='--', alpha=0.4)
     fig.patch.set_facecolor('white')
@@ -127,7 +129,7 @@ def plot_bar(df_mod, lmap, groups, module_title):
 
 
 def plot_line(df_mod, lmap, groups, module_title):
-    build_order = [lmap.get(g, g) for g in groups]
+    # Use group codes as x-axis positions, custom names only in tick labels
     tick_labels = [f"Build {g}\n{lmap.get(g, g)}" for g in groups]
     subtypes    = sorted(df_mod['Transaction_Subtype'].dropna().unique())
     colors      = sns.color_palette('tab10', len(subtypes))
@@ -137,14 +139,13 @@ def plot_line(df_mod, lmap, groups, module_title):
     for i, sub in enumerate(subtypes):
         agg = (
             df_mod[df_mod['Transaction_Subtype'] == sub]
-            .assign(Build_Label=lambda d: d['Transaction_Group'].map(lmap))
-            .groupby('Build_Label')['Response time(sec)'].mean()
-            .reindex(build_order)
+            .groupby('Transaction_Group')['Response time(sec)'].mean()
+            .reindex(list(groups))
         )
-        ax.plot(agg.index, agg.values, label=sub,
+        ax.plot(range(len(groups)), agg.values, label=sub,
                 color=colors[i], marker=markers[i % len(markers)],
                 markersize=9, linewidth=2)
-        for xi, (bl, val) in enumerate(agg.items()):
+        for xi, val in enumerate(agg.values):
             if pd.notna(val):
                 ax.text(xi, val + 0.015, f'{val:.2f}',
                         ha='center', va='bottom', fontsize=8,
@@ -154,8 +155,8 @@ def plot_line(df_mod, lmap, groups, module_title):
                  fontsize=13, fontweight='600', pad=12)
     ax.set_xlabel('Build / Sprint', fontsize=11)
     ax.set_ylabel('Response Time (seconds)', fontsize=11)
-    ax.set_xticks(range(len(build_order)))
-    ax.set_xticklabels(tick_labels, fontsize=10)
+    ax.set_xticks(range(len(groups)))
+    ax.set_xticklabels(tick_labels, fontsize=10, ha='center')
     ax.legend(title='Subtype', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
     ax.grid(axis='y', linestyle='--', alpha=0.4)
     fig.patch.set_facecolor('white')
@@ -214,10 +215,20 @@ with st.sidebar:
         module_options  = {module_map_side[p]: p for p in sorted_prefixes}
 
         selected_module = st.selectbox("Module", ["All Modules"] + list(module_options.keys()))
-        build_display   = [lmap_side[g] for g in all_groups]
-        selected_builds = st.multiselect("Builds / Sprints", options=build_display, default=build_display)
-        label_to_group  = {v: k for k, v in lmap_side.items()}
-        selected_groups = [label_to_group[b] for b in selected_builds if b in label_to_group]
+
+        st.markdown("**Compare Builds**")
+        st.caption("Select 1 to view single, 2+ to compare side by side")
+        # Show as "Build 01 — Pg_Bouncer" for clarity
+        build_display  = [f"Build {g}  —  {lmap_side[g]}" for g in all_groups]
+        build_display_map = {f"Build {g}  —  {lmap_side[g]}": g for g in all_groups}
+
+        selected_build_labels = st.multiselect(
+            "Builds / Sprints",
+            options=build_display,
+            default=build_display,
+            label_visibility="collapsed"
+        )
+        selected_groups = [build_display_map[b] for b in selected_build_labels if b in build_display_map]
     else:
         selected_module = "All Modules"
         selected_groups = []
