@@ -216,19 +216,20 @@ with st.sidebar:
 
         selected_module = st.selectbox("Module", ["All Modules"] + list(module_options.keys()))
 
-        st.markdown("**Compare Builds**")
-        st.caption("Select 1 to view single, 2+ to compare side by side")
-        # Show as "Build 01 — Pg_Bouncer" for clarity
-        build_display  = [f"Build {g}  —  {lmap_side[g]}" for g in all_groups]
-        build_display_map = {f"Build {g}  —  {lmap_side[g]}": g for g in all_groups}
+        st.divider()
+        st.markdown("**🔀 Compare Builds**")
+        st.caption("Tick the builds you want on the chart")
 
-        selected_build_labels = st.multiselect(
-            "Builds / Sprints",
-            options=build_display,
-            default=build_display,
-            label_visibility="collapsed"
-        )
-        selected_groups = [build_display_map[b] for b in selected_build_labels if b in build_display_map]
+        selected_groups = []
+        for g in all_groups:
+            label = lmap_side.get(g, f"Build {g}")
+            checked = st.checkbox(
+                f"Build {g}  —  {label}",
+                value=True,
+                key=f"chk_{g}"
+            )
+            if checked:
+                selected_groups.append(g)
     else:
         selected_module = "All Modules"
         selected_groups = []
@@ -306,27 +307,45 @@ if st.session_state.admin_unlocked:
         st.subheader("Step 2 — Name Each Build / Sprint")
         df_admin = st.session_state.get(DATA_KEY)
         if df_admin is not None:
-            all_groups   = sorted(df_admin['Transaction_Group'].dropna().unique())
+            all_groups    = sorted(df_admin['Transaction_Group'].dropna().unique())
             current_names = st.session_state.build_names
-            new_names     = {}
-            bcols = st.columns(min(len(all_groups), 4))
-            for i, g in enumerate(all_groups):
-                with bcols[i % len(bcols)]:
-                    new_names[str(g)] = st.text_input(
-                        f"Build **{g}**",
-                        value=current_names.get(str(g), f"Build {i+1}"),
-                        key=f"admin_bn_{g}"
-                    )
 
-            st.markdown("**Preview:** " + "  |  ".join(
-                [f"`{g}` → **{v}**" for g, v in new_names.items()]
-            ))
+            st.caption(f"Builds detected from CSV: **{', '.join(['Build ' + g for g in all_groups])}**")
+            st.markdown("Give each build a meaningful name. These show on chart axes and filters.")
+            st.divider()
 
-            if st.button("💾 Apply Build Names", type="primary"):
-                st.session_state.build_names = new_names
-                save_build_names_local(new_names)
-                st.success("✅ Applied! " + " | ".join(new_names.values()))
+            new_names = {}
+            # Render 2 per row for cleaner layout
+            pairs = [all_groups[i:i+2] for i in range(0, len(all_groups), 2)]
+            for pair in pairs:
+                cols = st.columns(2)
+                for col, g in zip(cols, pair):
+                    with col:
+                        st.markdown(f"**Build {g}**")
+                        new_names[str(g)] = st.text_input(
+                            f"Name for Build {g}",
+                            value=current_names.get(str(g), f"Build {g}"),
+                            key=f"admin_bn_{g}",
+                            label_visibility="collapsed",
+                            placeholder=f"e.g. Sprint 46, Pg_Bouncer..."
+                        )
+
+            st.divider()
+            # Live preview table
+            preview_rows = "  |  ".join([f"`Build {g}` → **{v}**" for g, v in new_names.items() if v])
+            st.markdown("**Preview:** " + preview_rows)
+
+            if st.button("💾 Apply Build Names", type="primary", use_container_width=True):
+                st.session_state.build_names = {str(g): str(v) for g, v in new_names.items()}
+                save_build_names_local(st.session_state.build_names)
+                st.success("✅ Applied! Charts will now show: " + " → ".join(new_names.values()))
                 st.rerun()
+
+            # Secrets instructions compactly
+            with st.expander("📌 Make build names permanent (survive redeploy)"):
+                secrets_text = "[build_names]\n" + "\n".join([f'"{g}" = "{v}"' for g, v in new_names.items() if v])
+                st.code(secrets_text, language="toml")
+                st.caption("Copy above → Streamlit Cloud → Manage app → Secrets → paste → Save")
         else:
             st.info("Upload CSV in Step 1 first.")
 
