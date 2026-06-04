@@ -220,6 +220,23 @@ def get_tc_key(tx: str) -> str:
     return m.group(1).upper() if m else ''
 
 
+def get_print_label(tx: str) -> str:
+    """Extract a meaningful short label for a Print transaction."""
+    t = tx.strip()
+    # Remove SC prefix like SC19_TC05_
+    t2 = re.sub(r'^SC\d+_TC[\d_-]+_', '', t, flags=re.IGNORECASE).strip()
+    # Remove trailing _01, _02 etc
+    t2 = re.sub(r'_\d{2}$', '', t2).strip()
+    # Remove "Fast Report" / "FastReport" suffix
+    t2 = re.sub(r'\s*[-–]?\s*Fast.?Report', '', t2, flags=re.IGNORECASE).strip()
+    # Remove leading "Print " word to get the subject
+    label = re.sub(r'^Print[_\s]*', '', t2, flags=re.IGNORECASE).strip()
+    # Clean up trailing dashes/underscores
+    label = re.sub(r'[-_]+$', '', label).strip()
+    return label if label else 'Print'
+''
+
+
 def classify_transaction(tx: str):
     """
     Returns list of (module_name, sub_module, subtype) tuples.
@@ -281,7 +298,7 @@ def classify_transaction(tx: str):
         results.append(('Special Investigation', 'Special Investigation', subtype))
         # Print rows also go to Print module
         if re.search(r'\bPrint\b|FastReport|Fast.Report', t, re.IGNORECASE):
-            results.append(('Print', 'Print', 'Print'))
+            results.append(('Print', 'Print', get_print_label(t)))
         return results
 
     # ── SC19 Advice ─────────────────────────────────────────────────────
@@ -335,7 +352,7 @@ def classify_transaction(tx: str):
             results.append(('Advice', f'Advice — {s}', subtype))
         # Print rows also go to Print module
         if re.search(r'\bPrint\b|FastReport|Fast.Report', t, re.IGNORECASE):
-            results.append(('Print', 'Print', 'Print'))
+            results.append(('Print', 'Print', get_print_label(t)))
         return results
 
     # ── SC20 Speciality Workup ───────────────────────────────────────────
