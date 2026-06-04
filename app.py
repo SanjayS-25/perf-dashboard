@@ -61,27 +61,128 @@ def save_build_names_local(names: dict):
         json.dump(cfg, f)
 
 
+# ── Module classification rules ──────────────────────────────────────────────
+# Maps Transaction string → (Module_Name, Sub_Module)
+
+def classify_transaction(tx: str):
+    """
+    Returns (module_name, sub_module, subtype) for any transaction row.
+    Priority: custom rules first, then generic SC-prefix extraction.
+    """
+    t = tx.strip()
+    tu = t.upper()
+
+    # ── 1. Login / URL module ──────────────────────────────────────────
+    if re.match(r'^(Enter URL|Login|Logout)', t, re.IGNORECASE):
+        subtype = re.split(r'\s*[-–]\s*|\s+', t)[0]   # Enter / Login / Logout
+        return ('Login & URL', 'Login & URL', subtype)
+
+    # ── 2. Print module — catch all Print rows anywhere ────────────────
+    if re.search(r'\bPrint\b', t, re.IGNORECASE) and 'SC' not in t[:3]:
+        return ('Print', 'Print', 'Print')
+
+    # Only SC-prefixed rows below this point
+    if not re.match(r'^SC\d+_', t):
+        # Non-SC, non-login rows (e.g. plain Search/Open Advice-Counselling)
+        if re.search(r'Advice.Counselling', t, re.IGNORECASE):
+            sub = 'NSA' if 'NSA' in tu else 'Counselling'
+            subtype = t.split()[0]
+            return ('Advice', f'Advice — {sub}', subtype)
+        return ('Other', 'Other', t.split()[0])
+
+    parts = t.split('_')
+    prefix = parts[0]   # e.g. SC19
+    sc_num = int(re.search(r'\d+', prefix).group())
+
+    # ── 3. Print inside SC rows ────────────────────────────────────────
+    if re.search(r'\bPrint\b|\bFast.?Report\b', t, re.IGNORECASE):
+        return ('Print', f'Print ({prefix})', 'Print')
+
+    # ── 4. Special Investigation (SC13) ───────────────────────────────
+    if sc_num == 13:
+        raw3 = parts[2] if len(parts) > 2 else ''
+        subtype = raw3.strip().split(' ')[0]
+        return ('Special Investigation', 'Special Investigation', subtype)
+
+    # ── 5. Speciality Workup (SC20) ───────────────────────────────────
+    if sc_num == 20:
+        raw3 = '_'.join(parts[2:]) if len(parts) > 2 else ''
+        # Identify sub-workup type
+        for kw, label in [
+            ('Paediatric','Paediatric Workup'),('Neuro','Neuro Workup'),
+            ('Physician','Physician Workup'),('Orbit','Orbit Workup'),
+            ('Lacrimal','Orbit Workup'),('Oculoplasty','Orbit Workup'),
+            ('Lasik','Lasik Workup'),('Cornea','Lasik Workup'),
+            ('Speciality','Speciality Workup'),('Redirect','Lasik Workup'),
+        ]:
+            if kw.lower() in raw3.lower():
+                subtype = raw3.strip().split(' ')[0]
+                return ('Speciality Workup', f'Workup — {label}', subtype)
+        subtype = raw3.strip().split(' ')[0] if raw3 else 'Other'
+        return ('Speciality Workup', 'Speciality Workup', subtype)
+
+    # ── 6. Advice module (SC19) — 6 sub-modules ───────────────────────
+    if sc_num == 19:
+        raw3 = '_'.join(parts[2:]) if len(parts) > 2 else ''
+        subtype = parts[2].strip().split(' ')[0] if len(parts) > 2 else 'Other'
+
+        # NSA sub-module
+        if any(k in tu for k in ['_NSA','NSA -','NSA–','IHMS_NSA']):
+            return ('Advice', 'Advice — NSA', subtype)
+        # Surgery advice (includes IP, IHMS, Scheduling, Anaesthesia etc.)
+        if any(k in raw3.upper() for k in ['SURGERY','IHMS','ADMISSION','IP PATIENT',
+                                             'SCHEDULING','ANAESTHESIA','CHECKLIST',
+                                             'SURGERY NOTES','OP POST','DISCHARGE',
+                                             'PROGNOSIS','CONSENT','COUNSELLING-DETAIL']):
+            return ('Advice', 'Advice — Surgery', subtype)
+        # Drug
+        if 'DRUG' in raw3.upper():
+            return ('Advice', 'Advice — Drug', subtype)
+        # Procedure
+        if 'PROCEDURE' in raw3.upper():
+            return ('Advice', 'Advice — Procedure', subtype)
+        # Treatment
+        if 'TREATMENT' in raw3.upper():
+            return ('Advice', 'Advice — Treatment', subtype)
+        # Refractive Correction + GP (first sub-module)
+        if any(k in raw3.upper() for k in ['REFRACTIVE','REFRACT','_GP']):
+            return ('Advice', 'Advice — Refraction & GP', subtype)
+        # Search/Open/Park — shared, assign to main Advice
+        if any(k in raw3.upper() for k in ['SEARCH','OPEN','PARK']):
+            return ('Advice', 'Advice — Search/Open/Park', subtype)
+        return ('Advice', 'Advice — Other', subtype)
+
+    # ── 7. Generic SC module ───────────────────────────────────────────
+    SC_MODULE_MAP = {
+        2: 'Complaints', 3: 'Vision', 4: 'Nutri-Assess',
+        5: 'Vulnerabilities', 6: 'History', 7: 'Refraction',
+        8: 'Refraction Others', 9: 'Investigation',
+        10: 'Anterior Segment', 11: 'Dilation', 12: 'Fundus Exam',
+        14: 'General Anaesthesia', 15: 'Diagnosis',
+        16: 'Opinion/Referral', 17: 'Special Remarks', 18: 'FollowUp',
+    }
+    mod = SC_MODULE_MAP.get(sc_num, f'{prefix}')
+    raw3 = parts[2] if len(parts) > 2 else ''
+    subtype = re.sub(r'^(Search|Open|Get|Create|Park|Update|Add|Edit|Delete)',
+                     lambda m: m.group(0), raw3.strip().split(' ')[0], flags=re.IGNORECASE)
+    return (mod, mod, subtype)
+
+
 # ── Data helpers ─────────────────────────────────────────────────────────────
-
-def extract_module_name(transaction: str) -> str:
-    parts = transaction.split('_')
-    if len(parts) < 3:
-        return transaction
-    raw = parts[2].strip()
-    raw = re.sub(r'_\d{2}$', '', raw).strip()
-    raw = re.sub(r'\s+(Patients?|Users?|Records?|Patient)\s*$', '', raw, flags=re.IGNORECASE).strip()
-    raw = re.sub(r'^(Search|Open|Get|Create|Park|Update|Print|Redirect\s+To|Add|Edit|Delete|View|Save|Submit|List)\s*[-–]?\s*', '', raw, flags=re.IGNORECASE).strip()
-    return raw if raw else parts[0]
-
 
 def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df = df[df['Transaction'].str.match(r'^SC\d+_', na=False)].copy()
     df = df[~df['Transaction'].str.upper().str.startswith('TOTAL')].copy()
-    df['Transaction_Subtype'] = df['Transaction'].str.split('_').str[2].str.strip().str.split(' ').str[0]
-    df['Transaction_Group']   = df['Transaction'].str.extract(r'_(\d{2})$')
-    df['Prefix']              = df['Transaction'].str.split('_').str[0]
-    df['Module_Name']         = df['Transaction'].apply(extract_module_name)
+    df = df[df['Transaction'].str.strip() != ''].copy()
+
+    classified = df['Transaction'].apply(classify_transaction)
+    df['Module_Name']       = classified.apply(lambda x: x[0])
+    df['Sub_Module']        = classified.apply(lambda x: x[1])
+    df['Transaction_Subtype'] = classified.apply(lambda x: x[2])
+    df['Transaction_Group'] = df['Transaction'].str.extract(r'_(\d{2})$')
+    df['Prefix']            = df['Transaction'].apply(
+        lambda t: re.match(r'^(SC\d+)', t).group(1) if re.match(r'^SC\d+', t) else 'COMMON'
+    )
     return df
 
 
@@ -201,20 +302,9 @@ with st.sidebar:
         all_groups  = sorted(df_side['Transaction_Group'].dropna().unique())
         lmap_side   = build_label_map(all_groups, st.session_state.build_names)
 
-        module_map_side = {}
-        for prefix, grp in df_side.groupby('Prefix'):
-            module_map_side[prefix] = grp['Module_Name'].mode()[0]
-        name_counts = {}
-        for p, n in module_map_side.items():
-            name_counts[n] = name_counts.get(n, 0) + 1
-        for p in module_map_side:
-            if name_counts[module_map_side[p]] > 1:
-                module_map_side[p] = f"{module_map_side[p]} ({p})"
-
-        sorted_prefixes = sorted(module_map_side.keys())
-        module_options  = {module_map_side[p]: p for p in sorted_prefixes}
-
-        selected_module = st.selectbox("Module", ["All Modules"] + list(module_options.keys()))
+        # Module filter — use Module_Name directly (not prefix)
+        all_module_names = sorted(df_side['Module_Name'].dropna().unique())
+        selected_module  = st.selectbox("Module", ["All Modules"] + list(all_module_names))
 
         st.divider()
         st.markdown("**🔀 Compare Builds**")
@@ -389,27 +479,17 @@ if df_all is None or df_all.empty:
 all_groups  = sorted(df_all['Transaction_Group'].dropna().unique())
 lmap        = build_label_map(all_groups, st.session_state.build_names)
 
-module_map = {}
-for prefix, grp in df_all.groupby('Prefix'):
-    module_map[prefix] = grp['Module_Name'].mode()[0]
-name_counts = {}
-for p, n in module_map.items():
-    name_counts[n] = name_counts.get(n, 0) + 1
-for p in module_map:
-    if name_counts[module_map[p]] > 1:
-        module_map[p] = f"{module_map[p]} ({p})"
+# ── Build sub-module list for tabs ───────────────────────────────────────────
+# Tab structure: Module_Name → [Sub_Module, ...]
+all_modules     = sorted(df_all['Module_Name'].dropna().unique())
+all_submodules  = sorted(df_all['Sub_Module'].dropna().unique())
 
-sorted_prefixes = sorted(module_map.keys())
-module_options  = {module_map[p]: p for p in sorted_prefixes}
-
-# Apply filters
+# Apply build filter
 df_view = df_all[df_all['Transaction_Group'].isin(selected_groups)].copy() if selected_groups else df_all.copy()
-if selected_module != "All Modules" and selected_module in module_options:
-    sel_prefix    = module_options[selected_module]
-    df_view       = df_view[df_view['Prefix'] == sel_prefix]
-    view_prefixes = [sel_prefix]
-else:
-    view_prefixes = sorted_prefixes
+
+# Apply module filter
+if selected_module != "All Modules":
+    df_view = df_view[df_view['Module_Name'] == selected_module]
 
 if selected_groups:
     build_labels_used = [lmap[g] for g in selected_groups if g in lmap]
@@ -418,9 +498,9 @@ if selected_groups:
 # Metric cards
 c1, c2, c3, c4, c5 = st.columns(5)
 for col, (label, val) in zip([c1, c2, c3, c4, c5], [
-    ("Modules",    df_view['Prefix'].nunique()),
+    ("Modules",    df_view['Module_Name'].nunique()),
     ("Builds",     df_view['Transaction_Group'].nunique()),
-    ("Subtypes",   df_view['Transaction_Subtype'].nunique()),
+    ("Sub-Modules",df_view['Sub_Module'].nunique()),
     ("Avg RT (s)", f"{df_view['Response time(sec)'].mean():.3f}"),
     ("Max RT (s)", f"{df_view['Response time(sec)'].max():.3f}"),
 ]):
@@ -432,32 +512,33 @@ for col, (label, val) in zip([c1, c2, c3, c4, c5], [
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-display_prefixes = [p for p in view_prefixes if p in df_view['Prefix'].unique()]
-if not display_prefixes:
+# Tabs = one per Sub_Module in view
+display_submods = sorted(df_view['Sub_Module'].dropna().unique())
+if not display_submods:
     st.warning("No data for selected filters.")
     st.stop()
 
-tabs = st.tabs([module_map[p] for p in display_prefixes])
-for tab, prefix in zip(tabs, display_prefixes):
+tabs = st.tabs(display_submods)
+for tab, submod in zip(tabs, display_submods):
     with tab:
-        df_mod    = df_view[df_view['Prefix'] == prefix]
-        mod_title = module_map[prefix]
-        groups    = sorted(df_mod['Transaction_Group'].dropna().unique())
+        df_mod = df_view[df_view['Sub_Module'] == submod]
+        groups = sorted(df_mod['Transaction_Group'].dropna().unique())
 
-        st.pyplot(plot_bar(df_mod, lmap, groups, mod_title))
+        st.pyplot(plot_bar(df_mod, lmap, groups, submod))
         st.markdown("<br>", unsafe_allow_html=True)
 
         if len(groups) > 1:
-            st.pyplot(plot_line(df_mod, lmap, groups, mod_title))
+            st.pyplot(plot_line(df_mod, lmap, groups, submod))
         else:
             st.info("Select 2+ builds in the sidebar to see the trend line chart.")
 
         with st.expander("📋 Raw data"):
             st.dataframe(
-                df_mod[['Transaction','Module_Name','Transaction_Subtype',
+                df_mod[['Transaction','Module_Name','Sub_Module','Transaction_Subtype',
                          'Transaction_Group','Response time(sec)','Error %']]
                 .rename(columns={'Transaction_Group': 'Build Code',
                                  'Transaction_Subtype': 'Subtype',
-                                 'Module_Name': 'Module'}),
+                                 'Module_Name': 'Module',
+                                 'Sub_Module': 'Sub Module'}),
                 use_container_width=True
             )
