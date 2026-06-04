@@ -62,128 +62,355 @@ def save_build_names_local(names: dict):
 
 
 # ── Module classification rules ──────────────────────────────────────────────
-# Maps Transaction string → (Module_Name, Sub_Module)
+#
+# STRATEGY:
+#  Each row gets (Module_Name, Sub_Module, subtype, modules_list)
+#  modules_list = list of Module_Names this row belongs to (for shared rows)
+#  Login/Logout/URL rows are shared across relevant modules.
+#
+# The dashboard shows:
+#  - Module tab → all transactions for that module (incl Login/Logout)
+#  - Sub-module tab → specific TC subset + shared rows (Search/Open/Park/Login)
+#
+# SHARED ROWS that appear in EVERY module:
+#   Enter URL - EMR, Login - EMR, Logout - EMR
+# ADVICE-ONLY shared:
+#   Enter URL - EMR_Couns, Login - EMR_Couns (Surgery + Counselling flows)
+#   Enter URL - EMR_Couns-NSA, Login - EMR_Couns-NSA (NSA flow)
+#   Enter URL - IHMS, Login IHMS (Surgery + NSA)
+#   Search/Open Advice-Counselling Patients (Surgery sub)
+#   Search/Open Advice-Counselling Patients_NSA (NSA sub)
+
+# SC19 TC → sub-module mapping (exact TC numbers from spec)
+SC19_TC_SUBMODULE = {
+    # Shared across all Advice sub-modules
+    'TC01': ['Refraction & GP', 'Drug', 'Procedure', 'Treatment', 'Surgery', 'NSA'],
+    'TC02': ['Refraction & GP', 'Drug', 'Procedure', 'Treatment', 'Surgery', 'NSA'],
+    'TC42': ['Refraction & GP', 'Drug', 'Procedure', 'Treatment', 'Surgery', 'NSA'],  # Park
+    # Refraction & GP
+    'TC03': ['Refraction & GP'],
+    'TC04': ['Refraction & GP'],
+    # Drug
+    'TC06': ['Drug'],
+    'TC07': ['Drug'],
+    'TC08': ['Drug'],   # Print Drug
+    # Procedure
+    'TC09': ['Procedure'],
+    'TC10': ['Procedure'],
+    # Treatment
+    'TC11': ['Treatment'],
+    'TC12': ['Treatment'],
+    # Surgery
+    'TC13': ['Surgery'],
+    'TC14': ['Surgery'],
+    'TC15': ['Surgery'],
+    'TC16': ['Surgery'],
+    'TC17': ['Surgery'],
+    'TC18': ['Surgery'],  # Print Prognosis
+    'TC19': ['Surgery'],  # Print Consent
+    'TC20': ['Surgery'],  # Print Counselling Card
+    'TC20_1': ['Surgery'],  # Search Counselling
+    'TC20_2': ['Surgery'],  # Open Counselling
+    'TC21': ['Surgery'],   # IHMS (non-NSA)
+    'TC22': ['Surgery'],   # IHMS (non-NSA)
+    'TC24': ['Surgery'],   # Search IP
+    'TC25': ['Surgery'],   # Open IP
+    'TC26': ['Surgery'],
+    'TC27': ['Surgery'],
+    'TC28': ['Surgery'],
+    'TC29': ['Surgery'],
+    'TC30': ['Surgery'],
+    'TC31': ['Surgery'],
+    'TC32': ['Surgery'],  # Print Sx-Notes
+    'TC34': ['Surgery'],
+    'TC36_discharge': ['Surgery', 'NSA'],  # Discharge IHMS
+    # NSA
+    'TC21_NSA': ['NSA'],
+    'TC22_NSA': ['NSA'],
+    'TC24_NSA': ['NSA'],
+    'TC25_NSA': ['NSA'],
+    'TC35': ['NSA'],
+    'TC36_NSA': ['NSA'],   # Create NSA
+    'TC37': ['NSA'],
+    'TC38': ['NSA'],
+    'TC38_1': ['NSA'],   # Search Counselling NSA
+    'TC38_2': ['NSA'],   # Open Counselling NSA
+    'TC39': ['NSA'],
+    'TC40': ['NSA'],
+    'TC41': ['NSA'],
+    'TC42_discharge': ['NSA'],  # Create Discharge Rounds
+}
+
+# SC20 TC → sub-module mapping
+SC20_TC_SUBMODULE = {
+    # Search/Open/Park shared across all Workup sub-modules
+    'TC01_search': ['Paediatric', 'Neuro', 'Physician', 'Orbit', 'Lasik'],
+    'TC02_open':   ['Paediatric', 'Neuro', 'Physician', 'Orbit', 'Lasik'],
+    'TC30':        ['Paediatric', 'Neuro', 'Physician', 'Orbit', 'Lasik'],
+    # Paediatric
+    'TC01_paed': ['Paediatric'],
+    'TC02_paed': ['Paediatric'],
+    # Neuro + Physician (Neuro includes Physician rows per spec)
+    'TC03': ['Neuro'],
+    'TC04': ['Neuro'],
+    'TC05': ['Neuro', 'Physician'],
+    'TC06': ['Neuro', 'Physician'],
+    'TC06_1': ['Neuro', 'Physician'],
+    'TC07': ['Neuro', 'Physician'],
+    'TC07_1': ['Neuro', 'Physician'],
+    'TC08': ['Neuro', 'Physician'],
+    'TC08_1': ['Neuro', 'Physician'],
+    # Orbit
+    'TC09': ['Orbit'],
+    'TC10': ['Orbit'],
+    'TC11': ['Orbit'],
+    'TC12': ['Orbit'],
+    'TC13': ['Orbit'],
+    'TC14': ['Orbit'],
+    'TC15': ['Orbit'],
+    'TC16': ['Orbit'],
+    'TC17': ['Orbit'],
+    'TC18': ['Orbit'],
+    'TC19': ['Orbit'],
+    'TC20': ['Orbit'],
+    'TC21': ['Orbit'],
+    'TC22': ['Orbit'],
+    'TC23': ['Orbit'],
+    'TC24': ['Orbit'],
+    # Lasik
+    'TC25': ['Lasik'],
+    'TC26': ['Lasik'],
+    'TC27': ['Lasik'],
+    'TC28': ['Lasik'],
+    'TC29': ['Lasik'],
+}
+
+# Modules that include Enter URL-EMR / Login-EMR / Logout-EMR
+ALL_MODULES = [
+    'Complaints', 'Vision', 'Nutri-Assess', 'Vulnerabilities', 'History',
+    'Refraction', 'Refraction Others', 'Investigation', 'Anterior Segment',
+    'Dilation', 'Fundus Exam', 'Special Investigation', 'General Anaesthesia',
+    'Diagnosis', 'Opinion/Referral', 'Special Remarks', 'FollowUp',
+    'Advice', 'Speciality Workup',
+]
+
+SC_MODULE_MAP = {
+    2: 'Complaints', 3: 'Vision', 4: 'Nutri-Assess',
+    5: 'Vulnerabilities', 6: 'History', 7: 'Refraction',
+    8: 'Refraction Others', 9: 'Investigation',
+    10: 'Anterior Segment', 11: 'Dilation', 12: 'Fundus Exam',
+    13: 'Special Investigation', 14: 'General Anaesthesia',
+    15: 'Diagnosis', 16: 'Opinion/Referral', 17: 'Special Remarks',
+    18: 'FollowUp', 19: 'Advice', 20: 'Speciality Workup',
+}
+
+ADVICE_SUBMODULES_ALL = [
+    'Advice — Refraction & GP', 'Advice — Drug', 'Advice — Procedure',
+    'Advice — Treatment', 'Advice — Surgery', 'Advice — NSA',
+]
+WORKUP_SUBMODULES_ALL = [
+    'Workup — Paediatric', 'Workup — Neuro', 'Workup — Physician',
+    'Workup — Orbit', 'Workup — Lasik',
+]
+
+
+def get_tc_key(tx: str) -> str:
+    """Extract TC key like TC01, TC06-1, etc from transaction string."""
+    m = re.search(r'_(TC[\d]+(?:[_-]\d+)?)', tx, re.IGNORECASE)
+    return m.group(1).upper() if m else ''
+
 
 def classify_transaction(tx: str):
     """
-    Returns (module_name, sub_module, subtype) for any transaction row.
-    Priority: custom rules first, then generic SC-prefix extraction.
+    Returns list of (module_name, sub_module, subtype) tuples.
+    A single row can belong to multiple modules/sub-modules.
     """
-    t = tx.strip()
+    t  = tx.strip()
     tu = t.upper()
+    results = []
 
-    # ── 1. Login / URL module ──────────────────────────────────────────
+    # ── Login / URL / Logout rows → shared across ALL modules ──────────
     if re.match(r'^(Enter URL|Login|Logout)', t, re.IGNORECASE):
-        subtype = re.split(r'\s*[-–]\s*|\s+', t)[0]   # Enter / Login / Logout
-        return ('Login & URL', 'Login & URL', subtype)
+        subtype = t.split()[0]
+        # Determine which modules this login row belongs to
+        if 'COUNS-NSA' in tu or 'COUNS_NSA' in tu:
+            # NSA counselling login → Advice (NSA sub)
+            results.append(('Advice', 'Advice — NSA', subtype))
+        elif 'COUNS' in tu:
+            # Counselling login → Advice (Surgery sub — per spec)
+            results.append(('Advice', 'Advice — Surgery', subtype))
+        elif 'IHMS' in tu:
+            # IHMS login → Advice Surgery + NSA
+            results.append(('Advice', 'Advice — Surgery', subtype))
+            results.append(('Advice', 'Advice — NSA', subtype))
+        else:
+            # Generic EMR Login/URL/Logout → ALL modules
+            for mod in ALL_MODULES:
+                results.append((mod, mod, subtype))
+        return results
 
-    # ── 2. Print module — catch all Print rows anywhere ────────────────
-    if re.search(r'\bPrint\b', t, re.IGNORECASE) and 'SC' not in t[:3]:
-        return ('Print', 'Print', 'Print')
+    # ── Plain Search/Open Advice-Counselling (non-SC rows) ──────────────
+    if re.search(r'Advice.Counselling', t, re.IGNORECASE) and not t.startswith('SC'):
+        subtype = t.split()[0]
+        if 'NSA' in tu:
+            results.append(('Advice', 'Advice — NSA', subtype))
+        else:
+            results.append(('Advice', 'Advice — Surgery', subtype))
+        return results
 
-    # Only SC-prefixed rows below this point
+    # ── Skip TOTAL or blank ─────────────────────────────────────────────
+    if tu.startswith('TOTAL') or not t:
+        return [('_skip', '_skip', '_skip')]
+
+    # ── Non-SC rows not caught above → Other ────────────────────────────
     if not re.match(r'^SC\d+_', t):
-        # Non-SC, non-login rows (e.g. plain Search/Open Advice-Counselling)
-        if re.search(r'Advice.Counselling', t, re.IGNORECASE):
-            sub = 'NSA' if 'NSA' in tu else 'Counselling'
-            subtype = t.split()[0]
-            return ('Advice', f'Advice — {sub}', subtype)
-        return ('Other', 'Other', t.split()[0])
+        return [('Other', 'Other', t.split()[0])]
 
-    parts = t.split('_')
-    prefix = parts[0]   # e.g. SC19
+    # ── SC-prefixed rows ─────────────────────────────────────────────────
+    parts  = t.split('_')
+    prefix = parts[0]
     sc_num = int(re.search(r'\d+', prefix).group())
+    mod    = SC_MODULE_MAP.get(sc_num, prefix)
 
-    # ── 3. Print inside SC rows ────────────────────────────────────────
-    if re.search(r'\bPrint\b|\bFast.?Report\b', t, re.IGNORECASE):
-        return ('Print', f'Print ({prefix})', 'Print')
+    # Subtype = first word of 3rd part (TC part)
+    raw3   = parts[2].strip() if len(parts) > 2 else ''
+    subtype = raw3.split(' ')[0] if raw3 else 'Other'
 
-    # ── 4. Special Investigation (SC13) ───────────────────────────────
+    # ── SC13 Special Investigation ──────────────────────────────────────
     if sc_num == 13:
-        raw3 = parts[2] if len(parts) > 2 else ''
-        subtype = raw3.strip().split(' ')[0]
-        return ('Special Investigation', 'Special Investigation', subtype)
+        results.append(('Special Investigation', 'Special Investigation', subtype))
+        # Print rows also go to Print module
+        if re.search(r'\bPrint\b|FastReport|Fast.Report', t, re.IGNORECASE):
+            results.append(('Print', 'Print', 'Print'))
+        return results
 
-    # ── 5. Speciality Workup (SC20) ───────────────────────────────────
-    if sc_num == 20:
-        raw3 = '_'.join(parts[2:]) if len(parts) > 2 else ''
-        # Identify sub-workup type
-        for kw, label in [
-            ('Paediatric','Paediatric Workup'),('Neuro','Neuro Workup'),
-            ('Physician','Physician Workup'),('Orbit','Orbit Workup'),
-            ('Lacrimal','Orbit Workup'),('Oculoplasty','Orbit Workup'),
-            ('Lasik','Lasik Workup'),('Cornea','Lasik Workup'),
-            ('Speciality','Speciality Workup'),('Redirect','Lasik Workup'),
-        ]:
-            if kw.lower() in raw3.lower():
-                subtype = raw3.strip().split(' ')[0]
-                return ('Speciality Workup', f'Workup — {label}', subtype)
-        subtype = raw3.strip().split(' ')[0] if raw3 else 'Other'
-        return ('Speciality Workup', 'Speciality Workup', subtype)
-
-    # ── 6. Advice module (SC19) — 6 sub-modules ───────────────────────
+    # ── SC19 Advice ─────────────────────────────────────────────────────
     if sc_num == 19:
-        raw3 = '_'.join(parts[2:]) if len(parts) > 2 else ''
-        subtype = parts[2].strip().split(' ')[0] if len(parts) > 2 else 'Other'
+        raw_up = '_'.join(parts).upper()
+        # Determine which sub-modules this TC row belongs to
+        subs = set()
 
-        # NSA sub-module
-        if any(k in tu for k in ['_NSA','NSA -','NSA–','IHMS_NSA']):
-            return ('Advice', 'Advice — NSA', subtype)
-        # Surgery advice (includes IP, IHMS, Scheduling, Anaesthesia etc.)
-        if any(k in raw3.upper() for k in ['SURGERY','IHMS','ADMISSION','IP PATIENT',
-                                             'SCHEDULING','ANAESTHESIA','CHECKLIST',
-                                             'SURGERY NOTES','OP POST','DISCHARGE',
-                                             'PROGNOSIS','CONSENT','COUNSELLING-DETAIL']):
-            return ('Advice', 'Advice — Surgery', subtype)
+        # TC01, TC02, TC42 Park → shared (all sub-modules + parent)
+        tc_part = get_tc_key(t)
+        if re.search(r'_TC01_', t, re.IGNORECASE) and 'SEARCH' in raw_up:
+            subs = {'Refraction & GP','Drug','Procedure','Treatment','Surgery','NSA'}
+        elif re.search(r'_TC02_', t, re.IGNORECASE) and 'OPEN' in raw_up:
+            subs = {'Refraction & GP','Drug','Procedure','Treatment','Surgery','NSA'}
+        elif re.search(r'_TC42_PARK', raw_up):
+            subs = {'Refraction & GP','Drug','Procedure','Treatment','Surgery','NSA'}
+        # NSA-specific rows
+        elif '_NSA' in raw_up or 'IHMS_NSA' in raw_up:
+            subs = {'NSA'}
+        # Surgery rows
+        elif any(k in raw_up for k in ['SURGERY','IHMS','ADMISSION','IP_PATIENT',
+                                        'SCHEDULING','ANAESTHESIA','CHECKLIST',
+                                        'SURGERY_NOTES','OP_POST','DISCHARGE',
+                                        'PROGNOSIS','CONSENT','COUNSELLING-DETAIL',
+                                        'COUNSELLING_DETAIL','TC32','TC34','TC26',
+                                        'TC27','TC28','TC29','TC30','TC31']):
+            subs = {'Surgery'}
+        elif re.search(r'_TC(13|14|15|16|17|18|19|20|21|22|24|25|26|27|28|29|30|31|32|34|36_DISCHARGE)_', raw_up):
+            subs = {'Surgery'}
         # Drug
-        if 'DRUG' in raw3.upper():
-            return ('Advice', 'Advice — Drug', subtype)
+        elif 'DRUG' in raw_up:
+            subs = {'Drug'}
         # Procedure
-        if 'PROCEDURE' in raw3.upper():
-            return ('Advice', 'Advice — Procedure', subtype)
+        elif 'PROCEDURE' in raw_up:
+            subs = {'Procedure'}
         # Treatment
-        if 'TREATMENT' in raw3.upper():
-            return ('Advice', 'Advice — Treatment', subtype)
-        # Refractive Correction + GP (first sub-module)
-        if any(k in raw3.upper() for k in ['REFRACTIVE','REFRACT','_GP']):
-            return ('Advice', 'Advice — Refraction & GP', subtype)
-        # Search/Open/Park — shared, assign to main Advice
-        if any(k in raw3.upper() for k in ['SEARCH','OPEN','PARK']):
-            return ('Advice', 'Advice — Search/Open/Park', subtype)
-        return ('Advice', 'Advice — Other', subtype)
+        elif 'TREATMENT' in raw_up:
+            subs = {'Treatment'}
+        # Refraction/GP
+        elif 'REFRACTIVE' in raw_up or 'REFRACT' in raw_up or '_GP' in raw_up:
+            subs = {'Refraction & GP'}
+        # NSA operations
+        elif re.search(r'_TC(35|36|37|38|39|40|41|42_CREATE)', raw_up):
+            subs = {'NSA'}
+        else:
+            subs = {'Refraction & GP'}  # fallback
 
-    # ── 7. Generic SC module ───────────────────────────────────────────
-    SC_MODULE_MAP = {
-        2: 'Complaints', 3: 'Vision', 4: 'Nutri-Assess',
-        5: 'Vulnerabilities', 6: 'History', 7: 'Refraction',
-        8: 'Refraction Others', 9: 'Investigation',
-        10: 'Anterior Segment', 11: 'Dilation', 12: 'Fundus Exam',
-        14: 'General Anaesthesia', 15: 'Diagnosis',
-        16: 'Opinion/Referral', 17: 'Special Remarks', 18: 'FollowUp',
-    }
-    mod = SC_MODULE_MAP.get(sc_num, f'{prefix}')
-    raw3 = parts[2] if len(parts) > 2 else ''
-    subtype = re.sub(r'^(Search|Open|Get|Create|Park|Update|Add|Edit|Delete)',
-                     lambda m: m.group(0), raw3.strip().split(' ')[0], flags=re.IGNORECASE)
-    return (mod, mod, subtype)
+        # Always add to parent Advice module
+        results.append(('Advice', 'Advice', subtype))
+        for s in subs:
+            results.append(('Advice', f'Advice — {s}', subtype))
+        # Print rows also go to Print module
+        if re.search(r'\bPrint\b|FastReport|Fast.Report', t, re.IGNORECASE):
+            results.append(('Print', 'Print', 'Print'))
+        return results
+
+    # ── SC20 Speciality Workup ───────────────────────────────────────────
+    if sc_num == 20:
+        raw_up = '_'.join(parts).upper()
+        subs   = set()
+
+        # Search/Open/Park shared across all workup sub-modules
+        if re.search(r'SEARCH.*SPECIALITY|SEARCH.*WORKUP', raw_up):
+            subs = {'Paediatric','Neuro','Physician','Orbit','Lasik'}
+        elif re.search(r'OPEN.*SPECIALITY|OPEN.*WORKUP', raw_up):
+            subs = {'Paediatric','Neuro','Physician','Orbit','Lasik'}
+        elif 'PARK.*SPECIALITY' in raw_up or 'PARK.*WOKUP' in raw_up or 'PARK.*WORKUP' in raw_up:
+            subs = {'Paediatric','Neuro','Physician','Orbit','Lasik'}
+        # Paediatric
+        elif 'PAEDIATRIC' in raw_up:
+            subs = {'Paediatric'}
+        # Neuro — includes Physician rows per spec
+        elif 'NEURO' in raw_up:
+            subs = {'Neuro'}
+        # Physician — also in Neuro sub
+        elif 'PHYSICIAN' in raw_up:
+            subs = {'Neuro', 'Physician'}
+        # Orbit — all orbit/lacrimal/oculoplasty rows
+        elif any(k in raw_up for k in ['ORBIT','LACRIMAL','OCULOPLASTY','SOCKET','GENERAL_PHYSICAL','GENERAL PHYSICAL']):
+            subs = {'Orbit'}
+        # Lasik / Cornea
+        elif any(k in raw_up for k in ['LASIK','CORNEA','REDIRECT']):
+            subs = {'Lasik'}
+        else:
+            subs = {'Paediatric'}
+
+        results.append(('Speciality Workup', 'Speciality Workup', subtype))
+        for s in subs:
+            results.append(('Speciality Workup', f'Workup — {s}', subtype))
+        return results
+
+    # ── Generic SC module ─────────────────────────────────────────────────
+    results.append((mod, mod, subtype))
+    return results
 
 
 # ── Data helpers ─────────────────────────────────────────────────────────────
 
 def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expands rows that belong to multiple modules/sub-modules.
+    Each physical CSV row may become multiple logical rows.
+    """
     df = df.copy()
     df = df[~df['Transaction'].str.upper().str.startswith('TOTAL')].copy()
     df = df[df['Transaction'].str.strip() != ''].copy()
 
-    classified = df['Transaction'].apply(classify_transaction)
-    df['Module_Name']       = classified.apply(lambda x: x[0])
-    df['Sub_Module']        = classified.apply(lambda x: x[1])
-    df['Transaction_Subtype'] = classified.apply(lambda x: x[2])
-    df['Transaction_Group'] = df['Transaction'].str.extract(r'_(\d{2})$')
-    df['Prefix']            = df['Transaction'].apply(
+    expanded = []
+    for _, row in df.iterrows():
+        classifications = classify_transaction(row['Transaction'])
+        for (mod, sub, subtype) in classifications:
+            if mod == '_skip':
+                continue
+            new_row = row.copy()
+            new_row['Module_Name']         = mod
+            new_row['Sub_Module']          = sub
+            new_row['Transaction_Subtype'] = subtype
+            expanded.append(new_row)
+
+    result = pd.DataFrame(expanded).reset_index(drop=True)
+
+    # Extract build group from end of transaction string _01, _02 etc.
+    result['Transaction_Group'] = result['Transaction'].str.extract(r'_(\d{2})$')
+    # For login/URL rows without group suffix, set group as None
+    # (they'll show in all builds — we fill NaN with a sentinel)
+    result['Prefix'] = result['Transaction'].apply(
         lambda t: re.match(r'^(SC\d+)', t).group(1) if re.match(r'^SC\d+', t) else 'COMMON'
     )
-    return df
+    return result
 
 
 def build_label_map(all_groups, build_name_map):
@@ -485,7 +712,14 @@ all_modules     = sorted(df_all['Module_Name'].dropna().unique())
 all_submodules  = sorted(df_all['Sub_Module'].dropna().unique())
 
 # Apply build filter
-df_view = df_all[df_all['Transaction_Group'].isin(selected_groups)].copy() if selected_groups else df_all.copy()
+# Login/URL rows have no _01 suffix → Transaction_Group is NaN → include them always
+if selected_groups:
+    df_view = df_all[
+        df_all['Transaction_Group'].isin(selected_groups) |
+        df_all['Transaction_Group'].isna()
+    ].copy()
+else:
+    df_view = df_all.copy()
 
 # Apply module filter
 if selected_module != "All Modules":
@@ -512,8 +746,30 @@ for col, (label, val) in zip([c1, c2, c3, c4, c5], [
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Tabs = one per Sub_Module in view
-display_submods = sorted(df_view['Sub_Module'].dropna().unique())
+# ── Tab ordering: parent module first, then sub-modules in defined order ──
+SUBMOD_ORDER = {
+    # Print
+    'Print':                      0,
+    # Advice
+    'Advice':                     0,
+    'Advice — Refraction & GP':   1,
+    'Advice — Drug':              2,
+    'Advice — Procedure':         3,
+    'Advice — Treatment':         4,
+    'Advice — Surgery':           5,
+    'Advice — NSA':               6,
+    # Speciality Workup
+    'Speciality Workup':          0,
+    'Workup — Paediatric':        1,
+    'Workup — Neuro':             2,
+    'Workup — Physician':         3,
+    'Workup — Orbit':             4,
+    'Workup — Lasik':             5,
+}
+
+available_submods = df_view['Sub_Module'].dropna().unique().tolist()
+display_submods   = sorted(available_submods, key=lambda s: (SUBMOD_ORDER.get(s, 99), s))
+
 if not display_submods:
     st.warning("No data for selected filters.")
     st.stop()
@@ -521,18 +777,22 @@ if not display_submods:
 tabs = st.tabs(display_submods)
 for tab, submod in zip(tabs, display_submods):
     with tab:
-        df_mod = df_view[df_view['Sub_Module'] == submod]
-        groups = sorted(df_mod['Transaction_Group'].dropna().unique())
+        df_mod = df_view[df_view['Sub_Module'] == submod].copy()
+        # For charts: only rows that have a build group (exclude Login/URL for grouping)
+        df_chart = df_mod[df_mod['Transaction_Group'].notna()]
+        groups   = sorted(df_chart['Transaction_Group'].dropna().unique())
 
-        st.pyplot(plot_bar(df_mod, lmap, groups, submod))
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if len(groups) > 1:
-            st.pyplot(plot_line(df_mod, lmap, groups, submod))
+        if groups:
+            st.pyplot(plot_bar(df_chart, lmap, groups, submod))
+            st.markdown("<br>", unsafe_allow_html=True)
+            if len(groups) > 1:
+                st.pyplot(plot_line(df_chart, lmap, groups, submod))
+            else:
+                st.info("Select 2+ builds in the sidebar to see the trend line chart.")
         else:
-            st.info("Select 2+ builds in the sidebar to see the trend line chart.")
+            st.info("No build-specific data for this sub-module.")
 
-        with st.expander("📋 Raw data"):
+        with st.expander("📋 All transactions (including Login/URL/Logout)"):
             st.dataframe(
                 df_mod[['Transaction','Module_Name','Sub_Module','Transaction_Subtype',
                          'Transaction_Group','Response time(sec)','Error %']]
