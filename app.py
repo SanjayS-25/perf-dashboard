@@ -238,7 +238,7 @@ def extract_fields(df: pd.DataFrame) -> pd.DataFrame:
             expanded.append(nr)
 
     result = pd.DataFrame(expanded).reset_index(drop=True)
-    result['Transaction_Group'] = result['Transaction'].str.extract(r'_(\d{2})$')
+    result['Transaction_Group'] = result['Transaction'].str.extract(r'_(\d{2})$').astype(str).replace('nan', pd.NA)
     result['Prefix'] = result['Transaction'].apply(
         lambda t: re.match(r'^(SC\d+)', t).group(1) if re.match(r'^SC\d+', t) else 'COMMON'
     )
@@ -353,7 +353,7 @@ with st.sidebar:
     if df_side is not None and not df_side.empty:
         st.subheader("🔍 Filter")
 
-        all_groups    = sorted(df_side['Transaction_Group'].dropna().unique())
+        all_groups    = sorted([str(g) for g in df_side['Transaction_Group'].dropna().unique()])
         lmap_side     = build_label_map(all_groups, st.session_state.build_names)
         all_mod_names = sorted(df_side['Module_Name'].dropna().unique())
 
@@ -363,9 +363,9 @@ with st.sidebar:
         st.caption("Tick the builds to include")
         selected_groups = []
         for g in all_groups:
-            label = lmap_side.get(g, f"Build {g}")
+            label = lmap_side.get(str(g), f"Build {g}")
             if st.checkbox(f"Build {g}  —  {label}", value=True, key=f"chk_{g}"):
-                selected_groups.append(g)
+                selected_groups.append(str(g))
     else:
         selected_module = "All Modules"
         selected_groups = []
@@ -420,10 +420,10 @@ if st.session_state.admin_unlocked:
         st.subheader("Step 2 — Name Each Build / Sprint")
         df_admin = st.session_state.get(DATA_KEY)
         if df_admin is not None:
-            all_groups    = sorted(df_admin['Transaction_Group'].dropna().unique())
+            all_groups    = sorted([str(g) for g in df_admin['Transaction_Group'].dropna().unique()])
             current_names = st.session_state.build_names
             new_names     = {}
-            st.caption(f"Detected builds: **{', '.join(['Build ' + g for g in all_groups])}**")
+            st.caption(f"Detected builds: **{', '.join(['Build ' + str(g) for g in all_groups])}**")
             pairs = [all_groups[i:i+2] for i in range(0, len(all_groups), 2)]
             for pair in pairs:
                 cols = st.columns(2)
@@ -463,14 +463,18 @@ if st.session_state.admin_unlocked:
 # ══════════════════════════════════════════════════════════════
 #  AUTO-LOAD data.csv from repo
 # ══════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner="Loading data...")
+def load_processed_csv(path):
+    df = pd.read_csv(path)
+    if 'Module_Name' not in df.columns:
+        df = extract_fields(df)
+    return df
+
 if st.session_state.get(DATA_KEY) is None and os.path.exists(CSV_PATH):
     try:
-        df_loaded = pd.read_csv(CSV_PATH)
-        # Check if already processed (has Module_Name) or raw CSV
-        if 'Module_Name' not in df_loaded.columns:
-            df_loaded = extract_fields(df_loaded)
+        df_loaded = load_processed_csv(CSV_PATH)
         st.session_state[DATA_KEY] = df_loaded
-        all_g = sorted(df_loaded['Transaction_Group'].dropna().unique())
+        all_g = sorted([str(g) for g in df_loaded['Transaction_Group'].dropna().unique()])
         existing = st.session_state.build_names.copy()
         for i, g in enumerate(all_g):
             if str(g) not in existing:
@@ -494,7 +498,7 @@ if df_all is None or df_all.empty:
 """)
     st.stop()
 
-all_groups = sorted(df_all['Transaction_Group'].dropna().unique())
+all_groups = sorted([str(g) for g in df_all['Transaction_Group'].dropna().unique()])
 lmap       = build_label_map(all_groups, st.session_state.build_names)
 
 # Apply filters
