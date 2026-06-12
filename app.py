@@ -752,10 +752,11 @@ elif page == "🚨 Error & Risk":
 
     with c2:
         st.subheader("⚠️ Transactions with Errors")
-        err_df = sc_df[sc_df['Error_Num'] > 0][
+        err_df = sc_df[sc_df['Error_Num'] > 0].sort_values('Error_Num', ascending=False)[
             ['Transaction','Module_Name','Transaction_Group','Response time(sec)','Error %']
-        ].sort_values('Error_Num', ascending=False).rename(
+        ].rename(
             columns={'Module_Name':'Module','Transaction_Group':'Build','Response time(sec)':'RT (s)'})
+            
         if err_df.empty:
             st.success("✅ No error transactions found!")
         else:
