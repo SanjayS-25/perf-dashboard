@@ -648,7 +648,7 @@ elif page == "🔍 Module Detail":
                              'Response time(sec)','Error %']].rename(
                     columns={'Transaction_Group':'Build','Transaction_Subtype':'Subtype',
                              'Module_Name':'Module','Sub_Module':'Sub Module'})
-                st.dataframe(display_df.style.applymap(
+                st.dataframe(display_df.style.map(
                     color_rt, subset=['Response time(sec)']),
                     use_container_width=True)
 
@@ -674,7 +674,7 @@ elif page == "⚖️ Build Comparison":
         except: pass
         return ''
 
-    st.dataframe(pivot.style.applymap(highlight_pivot), use_container_width=True)
+    st.dataframe(pivot.style.map(highlight_pivot), use_container_width=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Side-by-side Bar Chart — All Modules")
@@ -746,8 +746,8 @@ elif page == "🚨 Error & Risk":
                    [['Transaction','Module_Name','Transaction_Group','Response time(sec)','Error %']]
                    .rename(columns={'Module_Name':'Module','Transaction_Group':'Build',
                                     'Response time(sec)':'RT (s)'}))
-        st.dataframe(slow_df.style.applymap(color_rt, subset=['RT (s)'])
-                                   .applymap(color_err, subset=['Error %']),
+        st.dataframe(slow_df.style.map(color_rt, subset=['RT (s)'])
+                                   .map(color_err, subset=['Error %']),
                      use_container_width=True)
 
     with c2:
@@ -759,8 +759,8 @@ elif page == "🚨 Error & Risk":
         if err_df.empty:
             st.success("✅ No error transactions found!")
         else:
-            st.dataframe(err_df.style.applymap(color_rt,  subset=['RT (s)'])
-                                      .applymap(color_err, subset=['Error %']),
+            st.dataframe(err_df.style.map(color_rt,  subset=['RT (s)'])
+                                      .map(color_err, subset=['Error %']),
                          use_container_width=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -826,8 +826,8 @@ elif page == "📋 Transaction Detail":
     st.caption(f"Showing **{len(display)}** transactions")
     st.dataframe(
         display.style
-            .applymap(color_rt,  subset=['RT (s)'])
-            .applymap(color_err, subset=['Error %']),
+            .map(color_rt,  subset=['RT (s)'])
+            .map(color_err, subset=['Error %']),
         use_container_width=True,
         height=500
     )
